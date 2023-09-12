@@ -1,0 +1,59 @@
+mask_method:  'sam_with_gt' #'sam'
+track_method: 'superglue' #'pips'
+gt_prompt: True
+
+# superpoint_model_path: '/home/slam/Dataset/ObjectMatch/models/points_model.pth'
+maskrcnn_model_path: '/home/slam/Dataset/ObjectMatch/models/maskrcnn_model.pth' # Path to MaskRCNN Model
+airobj_model_path: '/home/slam/Dataset/ObjectMatch/models/airobject_model.pth'
+sam_model_path: '/home/slam/code/MobileSAM/weights/mobile_sam.pt'
+pips_model_path: '/home/slam/code/pips/reference_model/model-000200000.pth'
+
+track_frame_thr: 5
+object_min_points: 5
+object_match_threshold: 0.5 
+num_ref: 1
+prompt_points_num: 8
+neg_points_num: 100
+iters: 8
+resample: True
+
+data:
+    nclass: 81
+    normal_size: [480, 640] # min_size, max_size
+    box_padding: [100, 100]
+    
+model:
+  superpoint:
+    descriptor_dim: 256
+    nms_radius: 4
+    keypoint_threshold: 0.005 #0.005
+    max_keypoints: -1
+    remove_borders: 4
+    path: '/home/slam/code/Object-SLAM/model/weights/superpoint_v1.pth'
+
+  superglue:
+    descriptor_dim: 256
+    weights: 'indoor'
+    sinkhorn_iterations: 100
+    match_threshold: 0.2
+    path: '/home/slam/code/Object-SLAM/model/weights/superglue_outdoor.pth'
+
+  maskrcnn:
+    add_maskrcnn: true
+    trainable_layers: 5  # backbone trainable layers
+    fix_backbone: true
+    backbone_type: 'resnet50'
+    image_mean: [0.45, 0.45, 0.45]
+    image_std: [0.225, 0.225, 0.225]
+
+  airobj:
+    descriptor_dim: 256
+    points_encoder_dims: [2, 4, 8, 16]
+    hidden_dim: 512
+    dropout: 0
+    alpha: 0.2
+    nheads: 4
+    nout: 2048
+    temporal_encoder_dim: 2048 # AirObject
+    temporal_encoder_out_dim: 2048
+    temporal_kernel_size: 1
