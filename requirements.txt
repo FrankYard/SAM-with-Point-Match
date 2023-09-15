@@ -1,0 +1,11 @@
+numpy==1.24.3
+torch==1.12.1+cu102
+torchvision==0.13.1+cu102
+opencv-python
+einops
+scikit-learn-extra
+pycocotools
+scikit_image
+timm
+
+

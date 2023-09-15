@@ -4,11 +4,10 @@ import numpy as np
 from collections import defaultdict
 from itertools import chain
 
-from datasets.utils.preprocess import preprocess_data
 from model.build_model import build_sam, build_pips
 from model.superpoint.superpoint_v1 import SuperPoint
 from model.superglue import SuperGlue
-from utils.tools import remove_overlap, sample_points, get_crop_box
+from utils.segment_utils import preprocess_data, remove_overlap, sample_points, get_crop_box
 from fusion_graph import FusionGraph
 
 def get_neighbor(vertex_id,tri):
@@ -59,7 +58,6 @@ class ObjectTracker:
         self.match_object_dict = {} # global data for object match
 
         self.max_describe_input = 9
-        self.object_thr = configs['object_match_threshold']
         
         self.track_object_dict = {}
         self.track_frame_thr = configs['track_frame_thr']
@@ -241,7 +239,8 @@ class ObjectTracker:
             self.track_object_dict[instance_id]['point_masks'].append(point_mask)
             self.track_object_dict[instance_id]['masks'].append(mask)
 
-
+            frame_object_data['image_id'] = self.img_count
+            frame_object_data['image_raw'] = self.images[-1]
             frame_object_data['obj_points'].append(restored_object_points)
             frame_object_data['descs'].append(object_sp_descs)
             frame_object_data['neg_pids'].append(neg_point_ids)
@@ -383,24 +382,25 @@ class ObjectTracker:
         # if self.img_count >= 0:
         #     self.visual_matches(instance_ids_for_match, superpoint_out, matches_llist0, conf_llist0)
 
-
         points_int_list, descriptors_list = self.restore_points(superpoint_out, sizes, crop_toplefts)
 
         detections = self.graph_fusion(instance_ids_for_match, reference_frames, points_int_list, image_raw,
                           matches_llist0, conf_llist0,  matches_llist1, conf_llist1)
-        # tracking_key_points, tracking_neg_points = self.filter_matches(instance_ids_for_match, points_int_list, matches_llist0)
-        # detections =self.track_segment(instance_ids_for_match, tracking_key_points, tracking_neg_points, image_raw)
 
-        frame_object_data = self.update_track_data(detections, instance_ids_for_match, superpoint_out, 
+        single_frame_segments = self.update_track_data(detections, instance_ids_for_match, superpoint_out, 
                                                     points_int_list, crop_toplefts, crop_scales, new_masks)
-        if len(frame_object_data['masks']) == 0:
-            frame_object_data = None
+        if len(single_frame_segments['masks']) == 0:
+            multi_frame_segments = None
+        else:
+            multi_frame_segments = [single_frame_segments]
+
         if masks_classes is not None:
             self.instacnes_2_classes += masks_classes.tolist()
+            
         point_out = [{'points': torch.concat(points_int_list), 'point_descs': torch.concat(descriptors_list)}]
         print('img id', self.img_count, 'completes')
         self.img_count += 1
-        return point_out, frame_object_data, None
+        return point_out, multi_frame_segments
         
     @torch.no_grad()
     def generate_mask(self, image, prompt_points, labels):
@@ -564,18 +564,18 @@ class ObjectTracker:
                            if length > 0]
         if len(tracking_instances) > 0:
             if len(prepared_instances + valid_instances) > 0:
-                detections = self.get_pips_detection(prepared_instances, valid_instances, point_factor=torch.tensor([[h / H_, w / W_]]))
+                multi_frame_segments = self.get_pips_detection(prepared_instances, valid_instances, point_factor=torch.tensor([[h / H_, w / W_]]))
             # if detections is not None:
                 # points_output = [{'points': pred[t].flip(1) * torch.tensor([[h / H_, w / W_]])} for t in range(0, len(detections))]
-                points_output = detections
+                points_output = [{'points': frame_segments['points']} for frame_segments in multi_frame_segments]
             else:
                 # previous objects are all lost, reset pips head 
                 # if len(waiting_instances) > 0:
                 #     self.pips_head = min([self.track_object_dict[ins_id]['first_frame'] for ins_id in waiting_instances])
-                detections = None
+                multi_frame_segments = None
                 points_output = [{'points': pred[-1].flip(1) * torch.tensor([[h / H_, w / W_]])}]
 
-            out = points_output, None, detections
+            out = points_output, multi_frame_segments
         else:
 
             out = None
@@ -653,158 +653,6 @@ class ObjectTracker:
             raise RuntimeError
         else:
             self.pips_head = frame_id + 1 - int(not trackable)
-        return detections
-
-        
-    def viz_matches(self, matches, conf, h_w, pids=None):
-        """
-        pids: pids of former frame
-        """
-        import matplotlib.cm as cm
-        from utils.superglue_utils import make_matching_plot_fast
-        import cv2
-
-        keep = matches > -1
-        if pids is not None:
-            selected = np.zeros_like(keep, dtype=bool)
-            for pid in pids:
-                selected[pid] = True
-            keep = keep & selected
-        # Keep the matching keypoints.
-        kpts0, kpts1 = self.match_buffer[-2][0][0].cpu().numpy(), self.match_buffer[-1][0][0].cpu().numpy()
-        mkpts0 = kpts0[keep]
-        mkpts1 = kpts1[matches[keep]]
-        mconf = conf[keep]
-        color = cm.jet(mconf)
-        text = [
-            'SuperGlue',
-            'Keypoints: {}:{}'.format(len(kpts0), len(kpts1)),
-            'Matches: {}'.format(len(mkpts0)),
-        ]
-
-        # Display extra parameter info.
-        k_thresh = self.superpoint.config['keypoint_threshold']
-        m_thresh = self.superglue.config['match_threshold']
-        small_text = [
-            'Keypoint Threshold: {:.4f}'.format(k_thresh),
-            'Match Threshold: {:.2f}'.format(m_thresh),
-        ]
-
-        h, w = h_w
-        image0 = cv2.resize(self.images[-2].astype('float32'), (w, h))
-        image1 = cv2.resize(self.images[-1].astype('float32'), (w, h))
-        image0 = image0.mean(axis=-1, keepdims=False)
-        image1 = image1.mean(axis=-1, keepdims=False)
-
-        make_matching_plot_fast(image0, image1, kpts0, kpts1, mkpts0, mkpts1,
-                        color, text, path=None, show_keypoints=True, margin=10,
-                        opencv_display=True, opencv_title='match', small_text=small_text, delay=-1)
-        
-    def filter_matches(self, instance_ids, points_list, matches_llist):
-        matches_list = [sublist[-1] for sublist in matches_llist]
-
-        tracking_key_points = []
-        tracking_neg_points = []        
-        for i, instance_id in enumerate(instance_ids):
-            last_pid = self.track_object_dict[instance_id]['cropped_obj_pids'][-1]
-            present_point_array = points_list[i]
-            matches = matches_list[i]
-
-            matched_index = matches[last_pid]
-            keep = matched_index != -1
-            matched_index = matched_index[keep]
-            matched_points = present_point_array[matched_index]
-            tracking_key_points.append(matched_points[:, [1,0]].cpu().numpy()) # (y, x) -> (x, y)
-
-            last_neg_pids = self.track_object_dict[instance_id]['cropped_neg_pids'][-1]
-            matched_neg_index = matches[last_neg_pids]
-            keep_neg = matched_neg_index != -1
-            matched_neg_index = matched_neg_index[keep_neg]
-            matched_neg_points = present_point_array[matched_neg_index]
-
-            diff = matched_neg_points.view(-1, 1, 2) - matched_points.view(1, -1, 2)
-            diff2 = torch.sum(diff.abs(), dim=-1, keepdim=False)
-            near_mask = (diff2 < 35).any(dim=-1)
-            near_neg_points = matched_neg_points[near_mask]
-
-            tracking_neg_points.append(near_neg_points[:, [1,0]].cpu().numpy())
-
-        return tracking_key_points, tracking_neg_points
-
-    def track_segment(self, tracking_instance_ids, tracking_key_points, tracking_neg_points, image_raw, multimask=False):
-        self.mask_predictor.set_image(image_raw)
-
-        instance_list = []
-        mask_list = []
-        for instance_id, key_pts, neg_pts in zip(tracking_instance_ids, tracking_key_points, tracking_neg_points):
-            if len(key_pts) == 0 or len(neg_pts) == 0:
-                print('frame:', self.img_count, 'empty prompt points:', len(key_pts), len(neg_pts))
-            if len(key_pts) < self.object_min_points:
-                print('no enough key points')
-                continue
-            # else:
-            #     print('selected negative prompt points:', neg_pts[:1])
-
-            # key_labels = np.ones(len(key_pts))
-            # neg_labels = np.zeros(len(neg_pts[:1]))
-            if len(key_pts) > self.prompt_points_num:
-                filtered = torch.randperm(len(key_pts))[:self.prompt_points_num]
-                key_pts_filt = key_pts[filtered]
-            else:
-                key_pts_filt = key_pts
-            key_labels = np.ones(len(key_pts_filt))
-            neg_labels = np.zeros(len(neg_pts[:1]))
-            masks, scores, logits = self.mask_predictor.predict(key_pts_filt, key_labels, multimask_output=False)
-            for iter in range(self.iters-1):
-                if len(key_pts) > self.prompt_points_num:
-                    filtered = torch.randperm(len(key_pts))[:self.prompt_points_num]
-                    key_pts_filt = key_pts[filtered]
-                else:
-                    key_pts_filt = key_pts
-
-                neg_filt = neg_pts[ masks[0][neg_pts[:,1],neg_pts[:,0]] == 1 ]
-
-
-
-                key_labels = np.ones(len(key_pts_filt))
-                neg_labels = np.zeros(len(neg_filt[:1]))
-                index = min(len(neg_filt) - 1, iter)
-
-                ps = np.concatenate((key_pts_filt, neg_filt[index:index+1]))
-                p_labels = np.concatenate((key_labels, neg_labels))
-
-                masks, scores, logits = self.mask_predictor.predict(ps, p_labels, mask_input=logits[0:1], multimask_output=multimask)
-            mask = masks[0]
-
-            if self.img_count > 50 and instance_id == 5:
-                recall = mask[key_pts[:,1], key_pts[:,0]].mean()
-                fp = mask[neg_pts[:,1], neg_pts[:,0]].sum()
-                print('recall, fp:',recall, fp)
-            # if self.img_count >= 0:
-            #     tem = (logits - logits.min()) / (logits.max() - logits.min())
-            #     tem = (tem[0] * 255).astype(np.uint8)
-            #     import cv2
-            #     cv2.imshow('logit' + str(instance_id), tem)
-            #     cv2.waitKey(-1)
-
-            # mask, changes = amg.remove_small_regions(mask, area_thresh=120, mode='holes')
-      
-            # mask, changes = amg.remove_small_regions(mask, area_thresh=120, mode='islands')
-
-            instance_list.append(instance_id)
-            mask_list.append(mask[None, None, :, :])
-        # for i in range(min(len(points_output[0]['obj_points']) // chunk, 2)):
-        #     # p is [[y, x]]
-        #     p = points_output[0]['obj_points'][i*chunk: (i + 1)*chunk].cpu().numpy()
-        #     p_label = np.ones(chunk)
-        #     masks, scores, logits = self.mask_predictor.predict(p, p_label, multimask_output=False)
-        #     mask_list.append(masks[:, None, :, :])
-        if len(mask_list) == 0:
-            return None
-        masks_array = np.concatenate(mask_list)
-        point_labels = np.arange(len(mask_list))
-        instance_ids = np.array(instance_list)
-        detections = [{'masks': masks_array, 'point_labels': point_labels, 'labels':  instance_ids}]
         return detections
     
     def restore_points(self, superpoint_output, sizes, crop_toplefts=None):
