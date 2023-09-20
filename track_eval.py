@@ -8,6 +8,8 @@ import torch
 import cv2
 from pycocotools import mask as mask_utils
 import subprocess
+from copy import deepcopy
+import csv
 
 from object_tracker import ObjectTracker
 from utils.visualize import overlay_objects, overlay_points
@@ -195,35 +197,35 @@ def ablation(default_configs):
     group_name = 'ablation'
 
     print('Test traking box expasion:') 
-    configs = default_configs.copy()
+    configs = deepcopy(default_configs)
     for pading in [50, 100, 150, 200, 250, 300]:
         configs['data']['box_padding'] = [pading, pading]
         suffix = f'p{pading}'
         test_tracker(configs, suffix, group_name)
 
     print('Test sliding window length:')
-    configs = default_configs.copy()
+    configs = deepcopy(default_configs)
     for track_frame_thr in [2, 3, 4, 5, 6, 7]:
         configs['track_frame_thr'] = track_frame_thr
         suffix = f'tft{track_frame_thr}'
         test_tracker(configs, suffix, group_name)
 
     print('Test the number of reference frames:')
-    configs = default_configs.copy()
+    configs = deepcopy(default_configs)
     for num_ref in [1,2,3]:
         configs['num_ref'] = num_ref
         suffix = f'ref{num_ref}'
         test_tracker(configs, suffix, group_name)
 
     print('Test RANSAC with varied number of positive sample points :')
-    configs = default_configs.copy()
+    configs = deepcopy(default_configs)
     for ppts in [1,2,3,4,5,6,7,8,10,12,14,16,32]:
         configs['prompt_points_num'] = ppts
         suffix = f'ppts{ppts}'
         test_tracker(configs, suffix, group_name)
 
     print('Test Positive Only with varied number of positive sample points :')
-    configs = default_configs.copy()
+    configs = deepcopy(default_configs)
     for ppts in [1,2,3,4,5,6,7,8,10,12,14,16,32]:
         configs['prompt_points_num'] = ppts
         configs['neg_points_num'] = 0
@@ -231,7 +233,7 @@ def ablation(default_configs):
         test_tracker(configs, suffix, group_name)
 
     print('Test Fixed Sample with varied number of positive sample points :')
-    configs = default_configs.copy()
+    configs = deepcopy(default_configs)
     for ppts in [1,2,3,4,5,6,7,8,10,12,14,16,32]:
         configs['prompt_points_num'] = ppts
         configs['resample'] = False
@@ -239,7 +241,7 @@ def ablation(default_configs):
         test_tracker(configs, suffix, group_name)
 
     print('Test Non-iterative with varied number of positive sample points :')
-    configs = default_configs.copy()
+    configs = deepcopy(default_configs)
     for ppts in [1,2,3,4,5,6,7,8,10,12,14,16,32]:
         configs['prompt_points_num'] = ppts
         configs['resample'] = False
@@ -255,20 +257,154 @@ def compare_with_pips(default_configs):
     group_name = 'compare'
 
     print('Test point matching method:') 
-    configs = default_configs.copy()
+    configs = deepcopy(default_configs)
     configs['track_method'] = 'superglue'
     configs['track_frame_thr'] = 7
     suffix = ''
     test_tracker(configs, suffix, group_name)
 
     print('Test point tracking method:')
-    configs = default_configs.copy()
+    configs = deepcopy(default_configs)
     configs['track_method'] = 'pips'
     suffix = ''
     test_tracker(configs, suffix, group_name)
 
     print('Evaluating:')
     evaluate(group_name)
+
+def get_JF(file_name):
+    with open(file_name, 'r') as f:
+        line = f.readlines()[-1]
+        return float(line.split(' ')[-1])
+
+def generate_compare_result(group_name='compare', out_file='compare_result.txt'):
+    eval_superglue = "eval_out_superglue_gt"
+    eval_pips = "eval_out_pips_gt"
+
+    root = os.path.join(TRACKERS_FOLDER, group_name)
+    file_car_name = 'car_summary.txt'
+    file_ped_name = 'pedestrian_summary.txt'
+    
+    out_data = []
+
+    row = ['pips']
+    file_name = os.path.join(root, eval_pips, file_car_name)
+    row.append(get_JF(file_name))
+    file_name = os.path.join(root, eval_pips, file_ped_name)
+    row.append(get_JF(file_name))
+    out_data.append(row)
+
+    row = ['superglue']
+    file_name = os.path.join(root, eval_superglue, file_car_name)
+    row.append(get_JF(file_name))
+    file_name = os.path.join(root, eval_superglue, file_ped_name)
+    row.append(get_JF(file_name))
+    out_data.append(row)
+
+    with open(out_file, 'w', newline='') as f:
+        writer = csv.writer(f, delimiter=' ')
+        writer.writerow(['method', 'car', 'pedestrian'])
+        writer.writerows(out_data)
+
+def generate_point_matching_ablation_result(group_name='ablation', out_file='point_matching_ablation_result.txt'):
+    eval_box_expansion = "eval_out_superglue_gtp{}"
+    eval_window_length = "eval_out_superglue_gttft{}"
+    eval_refframe_num = "eval_out_superglue_gtref{}"
+
+    root = os.path.join(TRACKERS_FOLDER, group_name)
+    file_car_name = 'car_summary.txt'
+    file_ped_name = 'pedestrian_summary.txt'
+
+
+    box_expansion_table = []
+    for x in [50, 100, 150, 200, 250, 300]:
+        row = [x]
+        file_name = os.path.join(root, eval_box_expansion.format(x), file_car_name)
+        row.append(get_JF(file_name))
+        file_name = os.path.join(root, eval_box_expansion.format(x), file_ped_name)
+        row.append(get_JF(file_name))
+        box_expansion_table.append(row)
+
+
+    window_length_table = []
+    for x in [2, 3, 4, 5, 6, 7]:
+        row = [x]
+        file_name = os.path.join(root, eval_window_length.format(x), file_car_name)
+        row.append(get_JF(file_name))
+        file_name = os.path.join(root, eval_window_length.format(x), file_ped_name)
+        row.append(get_JF(file_name))
+        window_length_table.append(row)
+
+    reffrmae_num_table = []
+    for x in [1,2,3]:
+        row = [x]
+        file_name = os.path.join(root, eval_refframe_num.format(x), file_car_name)
+        row.append(get_JF(file_name))
+        file_name = os.path.join(root, eval_refframe_num.format(x), file_ped_name)
+        row.append(get_JF(file_name))
+        reffrmae_num_table.append(row)
+
+    with open(out_file, 'w', newline='') as f:
+        writer = csv.writer(f, delimiter=' ')
+        writer.writerow(['box_expansion', 'car', 'pedestrian'])
+        writer.writerows(box_expansion_table)
+        writer.writerow(['window_length', 'car', 'pedestrian'])
+        writer.writerows(window_length_table)
+        writer.writerow(['reffrmae_num', 'car', 'pedestrian'])
+        writer.writerows(reffrmae_num_table)
+
+
+        
+def plot_mask_estimatin_ablation_result(group_name='ablation'):
+    import matplotlib
+    from matplotlib import pyplot as plt
+
+    root = os.path.join(TRACKERS_FOLDER, group_name)
+    file_car_name = 'car_summary.txt'
+
+    eval_rspTrue = "eval_out_superglue_gtppts{}"
+    eval_rspFalse = "eval_out_superglue_gtppts{}rspFalse"
+    eval_iter1 = "eval_out_superglue_gtppts{}iter1"
+    eval_negpts0 = "eval_out_superglue_gtppts{}negpts0"
+
+    xs = [1,2,3,4,5,6,7,8,10,12,16]
+
+    JFs_rspTrue = []
+    for x in xs:
+        file_name = os.path.join(root, eval_rspTrue.format(x), file_car_name)
+        JFs_rspTrue.append(get_JF(file_name))
+
+
+    JFs_rspFalse = []
+    for x in xs:
+        file_name = os.path.join(root, eval_rspFalse.format(x), file_car_name)
+        JFs_rspFalse.append(get_JF(file_name))
+
+    JFs_iter1 = []
+    for x in xs:
+        file_name = os.path.join(root, eval_iter1.format(x), file_car_name)
+        JFs_iter1.append(get_JF(file_name))
+
+    JFs_negpts0 = []
+    for x in xs:
+        file_name = os.path.join(root, eval_negpts0.format(x), file_car_name)
+        JFs_negpts0.append(get_JF(file_name))
+
+    print(f'xs = {xs}\nJFs_rspTrue = {JFs_rspTrue}\nJFs_rspFalse = {JFs_rspFalse}\nJFs_iter1 = {JFs_iter1}\nJFs_negpts0 = {JFs_negpts0}')
+    plt.rc('font',family='Times New Roman')
+    # To avoid type 3 font in pdf
+    matplotlib.rcParams['pdf.fonttype'] = 42
+    matplotlib.rcParams['ps.fonttype'] = 42 # maybe not nessary
+
+    plt.plot(xs, JFs_rspTrue, marker='s', label='RANSAC', color='#BB5A56')
+    plt.plot(xs, JFs_negpts0, marker='s', label='Positive Only', color='#DEC370')
+    plt.plot(xs, JFs_rspFalse, marker='s', label='Fixed Sample', color='#82B366')
+    plt.plot(xs, JFs_iter1, marker='s', label='Non-iterative', color='#6C8EBF')
+
+    plt.xlabel('Number of Positive Points')
+    plt.ylabel(r'$\mathcal{J&F}$')
+    plt.legend()
+    plt.show()
 
 if __name__ =='__main__':
     parser = argparse.ArgumentParser(description="Evaluation")
@@ -293,7 +429,11 @@ if __name__ =='__main__':
     configs = yaml.safe_load(configs)
     configs['use_gpu'] = args.gpu
 
+    compare_with_pips(configs)
+    generate_compare_result()
     ablation(configs)
-    # compare_with_pips(configs)
+    generate_point_matching_ablation_result()
+    plot_mask_estimatin_ablation_result()
+
 
 

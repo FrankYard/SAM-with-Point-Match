@@ -398,7 +398,6 @@ class ObjectTracker:
             self.instacnes_2_classes += masks_classes.tolist()
             
         point_out = [{'points': torch.concat(points_int_list), 'point_descs': torch.concat(descriptors_list)}]
-        print('img id', self.img_count, 'completes')
         self.img_count += 1
         return point_out, multi_frame_segments
         
