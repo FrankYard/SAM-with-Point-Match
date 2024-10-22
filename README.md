@@ -1,5 +1,5 @@
 # SAM-with-point-match
-This is the code for paper "Segment Anything with One Shot for Semantic SLAM Using Sparse Point Matching".
+This is the code for sparse matching segment anything model.
 
 ## Requirements
 To install pytorch, use:
